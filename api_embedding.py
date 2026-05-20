@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from urllib3.poolmanager import key_fn_by_scheme
 import math
 
+
 # 加载.env文件
 load_dotenv()
 
@@ -28,7 +29,7 @@ def get_embeddings(texts: list[str]) -> list[list[float]]:
         "encoding_format":"float"
     }
     # 发送POST请求
-    response = requests.post(url, headers=headers, data=json.dumps(data))
+    response = requests.post(url, headers=headers, json=data)
     result = response.json()
     result["data"].sort(key=lambda x: x["index"])
     return [item["embedding"] for item in result["data"]]
@@ -44,6 +45,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 similarity = cosine_similarity(embeddings[0], embeddings[1])
+
 
 
 print(f"文本1: {text1}")

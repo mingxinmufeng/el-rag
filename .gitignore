@@ -2,3 +2,19 @@
 venv/
 __pycache__/
 *.pyc
+
+# 数据目录（保留目录结构，忽略内容）
+raw_pdf/*
+!raw_pdf/.gitkeep
+
+parse_result/*
+!parse_result/.gitkeep
+
+structured_chunks/*
+!structured_chunks/.gitkeep
+
+db/*
+!db/.gitkeep
+
+cleaned_md/*
+!cleaned_md/.gitkeep

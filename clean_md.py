@@ -3,12 +3,61 @@ import re
 import shutil
 
 # 路径配置
+RAW_PDF_DIR = "raw_pdf"
 PARSE_RESULT_DIR = "parse_result"
 CLEANED_MD_DIR = "cleaned_md"
-INPUT_MD = os.path.join(PARSE_RESULT_DIR, "full.md")
-OUTPUT_MD = os.path.join(CLEANED_MD_DIR, "full_cleaned.md")
-INPUT_IMAGES_DIR = os.path.join(PARSE_RESULT_DIR, "images")
-OUTPUT_IMAGES_DIR = os.path.join(CLEANED_MD_DIR, "images")
+
+# 动态获取parse_result下的子文件夹（对应各个PDF）
+def get_parse_result_dirs():
+    """获取parse_result下所有子文件夹（对应各个PDF的解析结果）"""
+    if not os.path.exists(PARSE_RESULT_DIR):
+        return []
+    
+    dirs = []
+    for item in os.listdir(PARSE_RESULT_DIR):
+        item_path = os.path.join(PARSE_RESULT_DIR, item)
+        # 是文件夹且包含full.md
+        if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "full.md")):
+            dirs.append(item)
+    return sorted(dirs)
+
+
+def get_doc_code_from_dirname(dir_name: str, text: str = "") -> str:
+    """从文件夹名或内容提取规范编号"""
+    # 先尝试从文件夹名提取 GB 编号
+    match = re.search(r'[GT]?B\d{4,6}[-—]?\d{4}', dir_name)
+    if match:
+        code = match.group(0)
+        code = re.sub(r'[—]', '-', code)
+        return code
+    
+    # 尝试从内容提取
+    if text:
+        return extract_doc_code(text)
+    
+    # 默认使用文件夹名
+    return dir_name
+
+
+def extract_doc_code(text: str) -> str:
+    """从文本中提取规范编号（如 GB50058-2014）"""
+    # 匹配 GB/T 或 GB 编号格式
+    patterns = [
+        r'[GT]?B\s*/?T?\s*\d{4,6}\s*[-—]\s*\d{4}',  # GB 50058-2014, GB/T 50058-2014
+        r'[GT]?B\d{4,6}[-—]\d{4}',  # GB50058-2014
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            # 清理空格，统一格式
+            code = match.group(0)
+            code = re.sub(r'\s+', '', code)  # 去掉所有空格
+            code = re.sub(r'[—]', '-', code)  # 统一连接符
+            return code
+    
+    # 如果没找到，返回默认值
+    return "doc"
 
 
 def clean_markdown(text: str) -> str:
@@ -112,53 +161,86 @@ def collect_referenced_images(text: str) -> list[str]:
     return re.findall(r"!\[.*?\]\(images/([^)]+)\)", text)
 
 
-def main():
-    os.makedirs(OUTPUT_IMAGES_DIR, exist_ok=True)
-
+def process_single_doc(parse_subdir: str):
+    """处理单个文档"""
+    input_md = os.path.join(PARSE_RESULT_DIR, parse_subdir, "full.md")
+    input_images_dir = os.path.join(PARSE_RESULT_DIR, parse_subdir, "images")
+    
+    if not os.path.exists(input_md):
+        print(f"跳过: {parse_subdir} (无full.md)")
+        return
+    
     # 读取原始MD
-    with open(INPUT_MD, "r", encoding="utf-8") as f:
+    with open(input_md, "r", encoding="utf-8") as f:
         raw = f.read()
-
+    
+    # 从文件夹名或内容提取规范编号
+    doc_code = get_doc_code_from_dirname(parse_subdir, raw)
+    output_md = os.path.join(CLEANED_MD_DIR, f"{doc_code}_cleaned.md")
+    output_images_dir = os.path.join(CLEANED_MD_DIR, f"{doc_code}_images")
+    
+    # 跳过已存在的
+    if os.path.exists(output_md):
+        print(f"跳过: {doc_code} (已存在)")
+        return
+    
     # 清洗
     cleaned = clean_markdown(raw)
-
+    
     # 收集引用图片并复制
+    os.makedirs(output_images_dir, exist_ok=True)
     referenced = collect_referenced_images(cleaned)
     copied, missing = 0, 0
     for fname in referenced:
-        src = os.path.join(INPUT_IMAGES_DIR, fname)
-        dst = os.path.join(OUTPUT_IMAGES_DIR, fname)
+        src = os.path.join(input_images_dir, fname)
+        dst = os.path.join(output_images_dir, fname)
         if os.path.exists(src):
             shutil.copy2(src, dst)
             copied += 1
         else:
             print(f"  [WARN] 图片不存在: {fname}")
             missing += 1
-
+    
     # 写出清洗后MD
-    with open(OUTPUT_MD, "w", encoding="utf-8") as f:
+    with open(output_md, "w", encoding="utf-8") as f:
         f.write(cleaned)
-
-    print(f"清洗完成: {OUTPUT_MD}")
-    print(f"引用图片: {len(referenced)} 张，已复制: {copied} 张，缺失: {missing} 张")
-    print(f"原始行数: {len(raw.splitlines())}，清洗后行数: {len(cleaned.splitlines())}")
-
-    # 质量报告：输出疑似问题行
+    
+    print(f"[{doc_code}] 清洗完成: {output_md}")
+    print(f"  图片: {copied}/{len(referenced)} 张")
+    
+    # 质量报告
     issues = []
     lines = cleaned.splitlines()
     for i, line in enumerate(lines, 1):
-        # 1. 区号空格异常，如 "2 1 区" "3 2 区"
         if re.match(r"^\d+ \d+ 区", line):
             issues.append((i, "区号空格异常", line))
-
+    
     if issues:
-        print(f"\n{'='*50}")
-        print(f"质量报告：发现 {len(issues)} 处疑似问题，请人工核查")
-        print(f"{'='*50}")
-        for lineno, reason, content in issues:
-            print(f"  第{lineno:4d}行 [{reason}]: {content[:80]}")
-    else:
-        print("\n质量报告：未发现明显问题")
+        print(f"  发现 {len(issues)} 处疑似问题")
+
+
+def main():
+    os.makedirs(CLEANED_MD_DIR, exist_ok=True)
+    
+    # 获取所有待处理的子文件夹
+    doc_dirs = get_parse_result_dirs()
+    
+    if not doc_dirs:
+        print(f"未在 {PARSE_RESULT_DIR} 下找到包含 full.md 的子文件夹")
+        print("请确保每个PDF的解析结果放在单独的子文件夹中，如:")
+        print(f"  {PARSE_RESULT_DIR}/GB50058-2014/full.md")
+        return
+    
+    print(f"发现 {len(doc_dirs)} 个文档待处理: {', '.join(doc_dirs)}")
+    print()
+    
+    # 批量处理
+    for doc_dir in doc_dirs:
+        process_single_doc(doc_dir)
+        print()
+    
+    print("=" * 50)
+    print("全部处理完成")
 
 
 if __name__ == "__main__":
